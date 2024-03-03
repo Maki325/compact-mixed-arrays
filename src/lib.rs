@@ -1,14 +1,29 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+mod data;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+use data::Data;
+use proc_macro::TokenStream;
+use quote::quote;
+use syn::parse::ParseStream;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+#[proc_macro]
+pub fn create_container(input: TokenStream) -> TokenStream {
+  let output = syn::parse::Parser::parse2(
+    |input: ParseStream<'_>| {
+      let mut output = Vec::new();
+      while !input.is_empty() {
+        let element = input.parse::<Data>()?;
+        output.push(element);
+      }
+      return Ok(output);
+    },
+    input.into(),
+  );
+
+  return match output {
+    Ok(data) => quote! {
+      #(#data)*
     }
+    .into(),
+    Err(err) => err.to_compile_error().into(),
+  };
 }
