@@ -65,10 +65,8 @@ impl ToTokens for Data {
       visibility,
     } = self;
 
-    let mut variable_names = Vec::with_capacity(types.len() * 2);
     let mut len_names = Vec::with_capacity(types.len());
-    let mut lens = Vec::with_capacity(types.len());
-    let mut variables = Vec::with_capacity(types.len() * 2);
+    let mut offset_names = Vec::with_capacity(types.len());
 
     let mut slice_getters = Vec::with_capacity(types.len());
     let mut sizes = Vec::with_capacity(types.len());
@@ -76,18 +74,16 @@ impl ToTokens for Data {
     for TypeInfo { name, ty } in types {
       let len_name = format_ident!("{}_len", name);
       let offset_name = format_ident!("{}_offset", name);
-      let fn_mut_name = format_ident!("get_mut_{}_slice", name);
-      let fn_name = format_ident!("get_{}_slice", name);
+      let fn_mut_name = format_ident!("{}_mut", name);
 
-      lens.push(quote! {#len_name: usize});
-      len_names.push(len_name.clone());
-      variables.push(quote! {#len_name: usize});
-      variables.push(quote! {#offset_name: usize});
-      sizes.push(
-        quote! {let #offset_name = size; let size = size + std::mem::align_of::<#ty>() * #len_name;},
-      );
-      variable_names.push(len_name.clone());
-      variable_names.push(offset_name.clone());
+      sizes.push(quote! {
+        let align_of = std::mem::align_of::<#ty>();
+        let rest = size % align_of;
+        let size = size + if rest > 0 { align_of - rest } else { 0 };
+
+        let #offset_name = size;
+        let size = size + std::mem::size_of::<#ty>() * #len_name;
+      });
 
       slice_getters.push(quote! {
         pub fn #fn_mut_name(&self) -> &mut [#ty] {
@@ -99,30 +95,42 @@ impl ToTokens for Data {
           };
         }
 
-        pub fn #fn_name(&self) -> &[#ty] {
+        pub fn #name(&self) -> &[#ty] {
           return unsafe {
             std::slice::from_raw_parts(
-              self.buf.add(self.#offset_name) as *mut #ty,
+              self.buf.add(self.#offset_name) as *const #ty,
               self.#len_name,
             )
           };
         }
       });
+
+      len_names.push(len_name);
+      offset_names.push(offset_name);
     }
 
     let len_names_struct = format_ident!("{name}Lens");
+    let offsets_struct_name = format_ident!("{name}Offsets");
 
     let data = quote! {
+      #visibility struct #offsets_struct_name {
+        pub size: usize,
+        #(pub #offset_names: usize),*
+      }
+
+      #[derive(Clone)]
       #visibility struct #len_names_struct {
-        #(#lens),*
+        #(pub #len_names: usize),*
       }
 
       #[derive(Debug)]
       #visibility struct #name {
         layout: std::alloc::Layout,
+        size: usize,
         buf: *mut u8,
 
-        #(#variables),*
+        #(#len_names: usize,)*
+        #(#offset_names: usize,)*
       }
 
       impl Drop for #name {
@@ -134,9 +142,18 @@ impl ToTokens for Data {
       }
 
       impl #name {
-        pub fn new(#len_names_struct {#(#len_names),*}: #len_names_struct) -> Result<Self, std::alloc::LayoutError> {
+        #[inline]
+        pub const fn calculate_offsets_and_size(#len_names_struct {#(#len_names),*}: #len_names_struct) -> #offsets_struct_name {
           let size = 0;
           #(#sizes)*
+
+          return #offsets_struct_name {size, #(#offset_names),*};
+        }
+
+        pub fn new(lens: #len_names_struct) -> Result<Self, std::alloc::LayoutError> {
+          let #offsets_struct_name {size, #(#offset_names),*} = Self::calculate_offsets_and_size(lens.clone());
+          let #len_names_struct {#(#len_names),*} = lens;
+
           let layout = std::alloc::Layout::array::<u8>(size)?.pad_to_align();
 
           let buf = unsafe { std::alloc::alloc_zeroed(layout) };
@@ -144,8 +161,34 @@ impl ToTokens for Data {
           return Ok(#name {
             buf,
             layout,
-            #(#variable_names),*
+            size,
+            #(#len_names,)*
+            #(#offset_names),*
           });
+        }
+
+        pub fn size(&self) -> usize {
+          return self.size;
+        }
+
+        pub fn buf(&self) -> *const u8 {
+          return self.buf;
+        }
+
+        pub fn buf_as_slice(&self) -> &[u8] {
+          return unsafe {
+            std::slice::from_raw_parts(self.buf, self.size)
+          };
+        }
+
+        pub fn buf_mut(&self) -> *mut u8 {
+          return self.buf;
+        }
+
+        pub fn buf_as_slice_mut(&self) -> &mut [u8] {
+          return unsafe {
+            std::slice::from_raw_parts_mut(self.buf, self.size)
+          };
         }
 
         #(#slice_getters)*

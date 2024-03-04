@@ -20,7 +20,7 @@ fn main() {
   println!("container: {container:#?}");
 
   {
-    let chars = container.get_mut_chars_slice();
+    let chars = container.chars_mut();
     println!("chars: {chars:#?}");
     for c in chars.iter_mut() {
       *c = 67;
@@ -29,11 +29,22 @@ fn main() {
   }
 
   {
-    let lines = container.get_mut_lines_slice();
+    let lines = container.lines_mut();
     println!("lines: {lines:#?}");
     for line in lines.iter_mut() {
       *line = 32;
     }
     println!("lines: {lines:#?}");
   }
+
+  {
+    let new_lines = container.new_lines_mut();
+    println!("new_lines: {new_lines:#?}");
+    for (i, is_newline) in new_lines.iter_mut().enumerate() {
+      *is_newline = i % 2 == 0;
+    }
+    println!("new_lines: {new_lines:#?}");
+  }
+
+  println!("{:#?}", container.buf_as_slice());
 }
